@@ -3,384 +3,511 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>THE BASEMENT - Mobile Horror</title>
+<title>PHEN-228: THE BOILED ONE</title>
 <style>
     body {
         margin: 0;
         background-color: #000;
         overflow: hidden;
-        touch-action: none; /* Prevents scrolling on iPad */
+        touch-action: none;
         font-family: 'Courier New', Courier, monospace;
         user-select: none;
         -webkit-user-select: none;
     }
     #gameCanvas {
         display: block;
-        width: 100vw;
-        height: 100vh;
+        width: 100%;
+        height: 100%;
         image-rendering: pixelated;
+        filter: contrast(1.2) brightness(0.8) sepia(0.2);
     }
-    #ui-layer {
+    /* VHS EFFECTS */
+    .overlay {
         position: absolute;
         top: 0; left: 0; width: 100%; height: 100%;
         pointer-events: none;
+        background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+        background-size: 100% 4px, 6px 100%;
+        z-index: 5;
+    }
+    .vignette {
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
+        pointer-events: none;
+        background: radial-gradient(circle, transparent 50%, black 100%);
+        z-index: 6;
+    }
+    #start-screen, #death-screen {
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
         display: flex;
         flex-direction: column;
         justify-content: center;
         align-items: center;
-    }
-    .hud-text {
-        color: red;
-        font-size: 24px;
-        font-weight: bold;
-        text-shadow: 0 0 10px #ff0000;
+        z-index: 100;
+        background: #000;
+        color: #d00;
         text-align: center;
     }
-    #controls-hint {
+    #death-screen { display: none; overflow: hidden; }
+    h1 { font-size: 40px; margin: 0; text-shadow: 2px 2px 0px red; }
+    p { color: white; margin-top: 10px; animation: blink 1s infinite; }
+    @keyframes blink { 0% {opacity:1;} 50% {opacity:0.2;} 100% {opacity:1;} }
+    
+    /* Control Hint Indicators */
+    .stick-zone {
         position: absolute;
-        bottom: 20px;
-        color: rgba(255, 255, 255, 0.5);
-        font-size: 14px;
-        width: 100%;
-        display: flex;
-        justify-content: space-between;
-        padding: 0 40px;
-        box-sizing: border-box;
-    }
-    /* Simple vignette to make it darker */
-    .vignette {
-        position: absolute;
-        top: 0; left: 0; width: 100%; height: 100%;
-        background: radial-gradient(circle, transparent 40%, black 95%);
+        bottom: 50px;
+        width: 100px;
+        height: 100px;
+        border: 2px dashed rgba(255,255,255,0.2);
+        border-radius: 50%;
         pointer-events: none;
-    }
-    /* Blood overlay on death */
-    #jumpscare {
-        display: none;
-        position: absolute;
-        top: 0; left: 0; width: 100%; height: 100%;
-        background: red;
-        opacity: 0;
-        transition: opacity 0.1s;
-        z-index: 10;
-        align-items: center;
+        display: flex;
         justify-content: center;
+        align-items: center;
+        color: rgba(255,255,255,0.3);
+        font-size: 10px;
     }
-    #jumpscare h1 {
-        font-size: 50px;
-        color: black;
-    }
+    #left-zone { left: 40px; }
+    #right-zone { right: 40px; }
 </style>
 </head>
 <body>
 
-    <div id="jumpscare"><h1>FOUND YOU</h1></div>
-    <canvas id="gameCanvas"></canvas>
-    <div class="vignette"></div>
-    
-    <div id="ui-layer">
-        <div id="status" class="hud-text"></div>
-    </div>
+<div id="start-screen">
+    <h1 style="color:red">PHEN-228</h1>
+    <p>TAP TO INITIALIZE BROADCAST</p>
+    <small style="color:#555; margin-top:20px;">Use Headphones</small>
+</div>
 
-    <div id="controls-hint">
-        <span>MOVE (Slide)</span>
-        <span>LOOK (Slide)</span>
-    </div>
+<div id="death-screen">
+    <h1 id="death-text">PARALYSIS</h1>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+<div class="overlay"></div>
+<div class="vignette"></div>
+
+<div id="left-zone" class="stick-zone">MOVE</div>
+<div id="right-zone" class="stick-zone">LOOK</div>
 
 <script>
-    // --- SETUP ---
+    // --- AUDIO ENGINE (Web Audio API) ---
+    const Audio = (function() {
+        let ctx = null;
+        let droneNode = null;
+        
+        function init() {
+            if (!ctx) {
+                ctx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Horror Drone (Low frequency oscillating)
+                droneNode = ctx.createOscillator();
+                droneNode.type = 'sawtooth';
+                droneNode.frequency.value = 50;
+                
+                const gain = ctx.createGain();
+                gain.gain.value = 0.05;
+                
+                const filter = ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.value = 200;
+
+                droneNode.connect(filter);
+                filter.connect(gain);
+                gain.connect(ctx.destination);
+                droneNode.start();
+                
+                // LFO to wobble the drone
+                const lfo = ctx.createOscillator();
+                lfo.type = 'sine';
+                lfo.frequency.value = 0.5;
+                const lfoGain = ctx.createGain();
+                lfoGain.gain.value = 50;
+                lfo.connect(lfoGain);
+                lfoGain.connect(filter.frequency);
+                lfo.start();
+            }
+            if (ctx.state === 'suspended') ctx.resume();
+        }
+
+        function playScream() {
+            if (!ctx) return;
+            const osc = ctx.createOscillator();
+            osc.type = 'sawtooth';
+            // Glitchy frequency sweep
+            osc.frequency.setValueAtTime(100, ctx.currentTime);
+            osc.frequency.linearRampToValueAtTime(1500, ctx.currentTime + 0.1);
+            osc.frequency.exponentialRampToValueAtTime(50, ctx.currentTime + 1.5);
+
+            const gain = ctx.createGain();
+            gain.gain.setValueAtTime(0.5, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 1.5);
+
+            // Distortion
+            const shaper = ctx.createWaveShaper();
+            function makeDistortionCurve(amount) {
+                let k = typeof amount === 'number' ? amount : 50,
+                    n_samples = 44100,
+                    curve = new Float32Array(n_samples),
+                    deg = Math.PI / 180,
+                    i = 0, x;
+                for ( ; i < n_samples; ++i ) {
+                    x = i * 2 / n_samples - 1;
+                    curve[i] = ( 3 + k ) * x * 20 * deg / ( Math.PI + k * Math.abs(x) );
+                }
+                return curve;
+            }
+            shaper.curve = makeDistortionCurve(400);
+
+            osc.connect(shaper);
+            shaper.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 2);
+        }
+
+        return { init, playScream };
+    })();
+
+    // --- GRAPHICS SETUP ---
     const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d', { alpha: false }); // Optimize
+    const ctx = canvas.getContext('2d', { alpha: false });
     
-    // Internal Resolution (Lower = retro look + faster on iPad)
-    const WIDTH = 160; 
-    const HEIGHT = 120;
-    
-    canvas.width = WIDTH;
-    canvas.height = HEIGHT;
+    // Resolution: Low = Retro & Fast
+    const W = 240; 
+    const H = 180;
+    canvas.width = W;
+    canvas.height = H;
 
-    // --- GAME CONSTANTS ---
-    const BLOCK_SIZE = 64;
-    const FOV = Math.PI / 3;
-    const MAP_SIZE = 16;
-    const SPEED = 3.0;
-    const TURN_SPEED = 0.06;
+    // --- ASSET GENERATION: THE BOILED ONE ---
+    // Procedurally drawing Phen-228's face
+    const spriteSize = 128;
+    const monsterCanvas = document.createElement('canvas');
+    monsterCanvas.width = spriteSize;
+    monsterCanvas.height = spriteSize;
+    const mCtx = monsterCanvas.getContext('2d');
 
-    // --- GAME STATE ---
-    let player = { x: 96, y: 96, dir: 0 };
-    let inputs = { forward: 0, turn: 0 }; // -1 to 1 range
-    let zBuffer = new Array(WIDTH).fill(0); // For depth sorting sprites
-    let isDead = false;
-    let frameCount = 0;
-
-    // Map: 1=Wall, 0=Empty
-    const map = [
-        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-        1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
-        1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
-        1,0,0,1,1,0,1,0,0,1,0,0,0,0,0,1,
-        1,0,0,1,0,0,0,0,0,1,0,0,0,0,0,1,
-        1,0,0,1,0,0,0,0,0,1,1,1,1,0,0,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,0,1,1,0,0,0,1,1,1,0,0,1,0,0,1,
-        1,0,0,0,0,0,0,1,0,1,0,0,1,0,0,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,
-        1,0,1,0,0,0,0,1,0,1,0,0,0,0,0,1,
-        1,0,1,0,0,0,0,1,1,1,0,0,0,0,0,1,
-        1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-    ];
-
-    // The Monster Entity
-    let monster = {
-        x: 10 * BLOCK_SIZE,
-        y: 10 * BLOCK_SIZE,
-        texture: null
-    };
-
-    // --- PROCEDURAL GRAPHICS ---
-    // Generate a creepy face texture in code
-    function createMonsterTexture() {
-        const mCanvas = document.createElement('canvas');
-        mCanvas.width = 64;
-        mCanvas.height = 64;
-        const mCtx = mCanvas.getContext('2d');
-
-        // Body (Shadow)
-        mCtx.fillStyle = '#000';
-        mCtx.fillRect(10, 10, 44, 54);
+    function drawMonster() {
+        const c = mCtx;
+        // Base Skin (Burnt Red/Brown)
+        c.fillStyle = '#4a0e0e';
+        c.beginPath();
+        c.ellipse(64, 64, 40, 55, 0, 0, Math.PI*2);
+        c.fill();
         
-        // Eyes (Glowing Red)
-        mCtx.fillStyle = '#f00';
-        mCtx.beginPath();
-        mCtx.arc(22, 25, 4, 0, Math.PI*2);
-        mCtx.arc(42, 25, 4, 0, Math.PI*2);
-        mCtx.fill();
+        // Highlights (Melted flesh)
+        c.fillStyle = '#6e1a1a';
+        c.beginPath();
+        c.ellipse(50, 50, 10, 20, 0.2, 0, Math.PI*2);
+        c.fill();
+        c.beginPath();
+        c.ellipse(78, 55, 8, 15, -0.2, 0, Math.PI*2);
+        c.fill();
 
-        // Mouth (Scream)
-        mCtx.beginPath();
-        mCtx.ellipse(32, 45, 6, 12, 0, 0, Math.PI*2);
-        mCtx.fill();
+        // Eyes (Wide, staring, bloodshot)
+        c.fillStyle = '#000'; // Sockets
+        c.beginPath();
+        c.arc(45, 55, 12, 0, Math.PI*2);
+        c.arc(83, 55, 12, 0, Math.PI*2);
+        c.fill();
+
+        c.fillStyle = '#fff'; // Eyeball
+        c.beginPath();
+        c.arc(45, 55, 6, 0, Math.PI*2);
+        c.arc(83, 55, 6, 0, Math.PI*2);
+        c.fill();
         
-        return mCanvas;
+        c.fillStyle = '#000'; // Pupil (Tiny)
+        c.beginPath();
+        c.arc(45, 55, 1, 0, Math.PI*2);
+        c.arc(83, 55, 1, 0, Math.PI*2);
+        c.fill();
+
+        // Mouth (The Smile)
+        c.fillStyle = '#1a0000';
+        c.beginPath();
+        c.moveTo(40, 90);
+        c.quadraticCurveTo(64, 110, 88, 90); // Smile bottom
+        c.quadraticCurveTo(64, 95, 40, 90);  // Smile top
+        c.fill();
+        
+        // Teeth (Yellowed)
+        c.fillStyle = '#aa8';
+        for(let i=0; i<5; i++) {
+            c.fillRect(45 + i*8, 92, 4, 4);
+        }
     }
-    monster.texture = createMonsterTexture();
+    drawMonster();
 
-    // --- TOUCH INPUT SYSTEM ---
-    // We split screen in half: Left = Move, Right = Turn
-    let touchStartY = 0;
-    let touchStartX = 0;
+    // --- GAME ENGINE ---
+    const BLOCK = 64;
+    const FOV = Math.PI / 2.5;
+    const ZBUFFER = new Float32Array(W);
+    const MAP_DIM = 24; // BIG MAP
 
-    window.addEventListener('touchstart', (e) => {
-        for(let i=0; i<e.touches.length; i++) {
-            let t = e.touches[i];
-            if(isDead) {
-                resetGame();
-                return;
-            }
-            if (t.clientX < window.innerWidth / 2) {
-                touchStartY = t.clientY;
-            } else {
-                touchStartX = t.clientX;
-            }
-        }
-    }, {passive: false});
-
-    window.addEventListener('touchmove', (e) => {
-        e.preventDefault(); // Stop scrolling
-        inputs.forward = 0;
-        inputs.turn = 0;
-
-        for(let i=0; i<e.touches.length; i++) {
-            let t = e.touches[i];
-            
-            // Left Side: Move
-            if (t.clientX < window.innerWidth / 2) {
-                let deltaY = touchStartY - t.clientY;
-                // Clamp speed
-                if (deltaY > 20) inputs.forward = 1;
-                if (deltaY < -20) inputs.forward = -1;
+    // 0=Empty, 1=Wall
+    let map = [];
+    // Generate a large hall with pillars
+    for(let y=0; y<MAP_DIM; y++) {
+        for(let x=0; x<MAP_DIM; x++) {
+            // Border walls
+            if(x===0 || x===MAP_DIM-1 || y===0 || y===MAP_DIM-1) {
+                map.push(1);
             } 
-            // Right Side: Turn
-            else {
-                let deltaX = t.clientX - touchStartX;
-                if (deltaX > 20) inputs.turn = 1;
-                if (deltaX < -20) inputs.turn = -1;
+            // Random pillars, but leave center open
+            else if (Math.random() > 0.85 && (x < 8 || x > 16 || y < 8 || y > 16)) {
+                map.push(1);
+            } else {
+                map.push(0);
             }
         }
-    }, {passive: false});
+    }
 
-    window.addEventListener('touchend', (e) => {
-        // Simple reset inputs if no fingers
-        if (e.touches.length === 0) {
-            inputs.forward = 0;
-            inputs.turn = 0;
+    let player = { x: BLOCK*2, y: BLOCK*2, dir: 0.5 };
+    let enemy = { x: BLOCK*12, y: BLOCK*12 };
+    let frame = 0;
+    let gameState = 'START'; // START, PLAY, DEAD
+
+    // --- INPUTS ---
+    let touchL = { active:false, x:0, y:0, dx:0, dy:0, id: -1 };
+    let touchR = { active:false, x:0, y:0, dx:0, dy:0, id: -1 };
+    const STICK_MAX = 50;
+
+    window.addEventListener('touchstart', e => {
+        if(gameState === 'START') {
+            Audio.init();
+            gameState = 'PLAY';
+            document.getElementById('start-screen').style.display = 'none';
+        }
+        if(gameState === 'DEAD') {
+             location.reload(); 
+        }
+
+        e.preventDefault();
+        for(let i=0; i<e.changedTouches.length; i++) {
+            let t = e.changedTouches[i];
+            if(t.clientX < window.innerWidth/2) {
+                if(!touchL.active) {
+                    touchL.active = true; touchL.id = t.identifier;
+                    touchL.x = t.clientX; touchL.y = t.clientY;
+                }
+            } else {
+                if(!touchR.active) {
+                    touchR.active = true; touchR.id = t.identifier;
+                    touchR.x = t.clientX; touchR.y = t.clientY;
+                }
+            }
+        }
+    }, {passive:false});
+
+    window.addEventListener('touchmove', e => {
+        e.preventDefault();
+        for(let i=0; i<e.changedTouches.length; i++) {
+            let t = e.changedTouches[i];
+            if(touchL.active && t.identifier === touchL.id) {
+                touchL.dx = t.clientX - touchL.x;
+                touchL.dy = t.clientY - touchL.y;
+            }
+            if(touchR.active && t.identifier === touchR.id) {
+                touchR.dx = t.clientX - touchR.x;
+                touchR.dy = t.clientY - touchR.y;
+            }
+        }
+    }, {passive:false});
+
+    window.addEventListener('touchend', e => {
+        e.preventDefault();
+        for(let i=0; i<e.changedTouches.length; i++) {
+            let t = e.changedTouches[i];
+            if(t.identifier === touchL.id) { touchL.active = false; touchL.dx=0; touchL.dy=0; }
+            if(t.identifier === touchR.id) { touchR.active = false; touchR.dx=0; touchR.dy=0; }
         }
     });
 
-    // --- GAME LOOP ---
-    function update() {
-        if (isDead) return;
-
-        // Player Movement
-        if (inputs.turn !== 0) player.dir += inputs.turn * TURN_SPEED;
-        
-        if (inputs.forward !== 0) {
-            let step = inputs.forward * SPEED;
-            let newX = player.x + Math.cos(player.dir) * step;
-            let newY = player.y + Math.sin(player.dir) * step;
-
-            // Collision
-            if (map[Math.floor(newY/BLOCK_SIZE) * MAP_SIZE + Math.floor(newX/BLOCK_SIZE)] === 0) {
-                player.x = newX;
-                player.y = newY;
-            }
-        }
-
-        // MONSTER AI (Simple Chase)
-        // Move monster towards player slowly
-        let dx = player.x - monster.x;
-        let dy = player.y - monster.y;
-        let dist = Math.sqrt(dx*dx + dy*dy);
-
-        if (dist > 20) {
-            monster.x += (dx / dist) * 1.5; // Speed 1.5
-            monster.y += (dy / dist) * 1.5;
-        }
-
-        // Kill check
-        if (dist < 30) {
-            death();
-        }
-
-        // Glitch effect logic
-        frameCount++;
-    }
-
-    function draw() {
-        // Clear screen (Ceiling/Floor)
-        ctx.fillStyle = '#111'; // Ceiling
-        ctx.fillRect(0, 0, WIDTH, HEIGHT / 2);
-        ctx.fillStyle = '#222'; // Floor
-        ctx.fillRect(0, HEIGHT / 2, WIDTH, HEIGHT / 2);
-
-        // 1. RAYCAST WALLS
-        for (let x = 0; x < WIDTH; x++) {
-            let rayAngle = (player.dir - FOV / 2.0) + (x / WIDTH) * FOV;
-            let dist = 0;
-            let hit = false;
-            
-            let eyeX = Math.cos(rayAngle);
-            let eyeY = Math.sin(rayAngle);
-
-            let testX = player.x;
-            let testY = player.y;
-
-            // Simple Raymarch
-            while (!hit && dist < 500) {
-                dist += 2; // Step size
-                testX = player.x + eyeX * dist;
-                testY = player.y + eyeY * dist;
-
-                let mx = Math.floor(testX / BLOCK_SIZE);
-                let my = Math.floor(testY / BLOCK_SIZE);
-
-                if (mx < 0 || mx >= MAP_SIZE || my < 0 || my >= MAP_SIZE || map[my*MAP_SIZE + mx] === 1) {
-                    hit = true;
-                }
-            }
-            
-            // Fix fisheye
-            let pDist = dist * Math.cos(rayAngle - player.dir);
-            zBuffer[x] = pDist; // Save for sprite sorting
-
-            // Wall Height
-            let wallH = (BLOCK_SIZE * HEIGHT) / pDist;
-            
-            // Draw Wall Strip
-            // Color based on distance (Lighting)
-            let brightness = Math.max(0, 200 - pDist * 0.8);
-            ctx.fillStyle = `rgb(${brightness}, ${brightness * 0.5}, ${brightness * 0.5})`; // Reddish walls
-            ctx.fillRect(x, (HEIGHT - wallH) / 2, 1, wallH);
-        }
-
-        // 2. DRAW MONSTER (Sprite Casting)
-        drawSprite(monster);
-    }
-
-    function drawSprite(sprite) {
-        // Relative position
-        let dx = sprite.x - player.x;
-        let dy = sprite.y - player.y;
-
-        // Transform sprite with the inverse camera matrix
-        // [ planeX   dirX ] -1                                       [ dirY      -dirX ]
-        // [               ]       =  1/(planeX*dirY-dirX*planeY) * [                 ]
-        // [ planeY   dirY ]                                          [ -planeY  planeX ]
-
-        // Simplified 2D rotation
-        let spriteDist = Math.sqrt(dx*dx + dy*dy);
-        
-        // Calculate angle between player and sprite
-        let spriteAngle = Math.atan2(dy, dx) - player.dir;
-        
-        // Wrap angle to -PI to PI
-        while (spriteAngle < -Math.PI) spriteAngle += 2 * Math.PI;
-        while (spriteAngle > Math.PI) spriteAngle -= 2 * Math.PI;
-
-        // Check if visible (in front of player)
-        if (Math.abs(spriteAngle) < FOV / 1.5) {
-             let screenX = (0.5 * (spriteAngle / (FOV / 2)) + 0.5) * WIDTH;
-             let spriteH = (BLOCK_SIZE * HEIGHT) / spriteDist;
-             let spriteW = spriteH; // Square sprite
-
-             // Draw sprite scanlines
-             let startX = Math.floor(screenX - spriteW / 2);
-             let endX = Math.floor(screenX + spriteW / 2);
-
-             for (let strip = startX; strip < endX; strip++) {
-                 // Check if strip is on screen AND closer than wall
-                 if (strip >= 0 && strip < WIDTH && spriteDist < zBuffer[strip]) {
-                     // Calculate texture coordinate
-                     let texX = Math.floor( (strip - startX) / spriteW * 64 );
-                     
-                     // Draw strip of sprite
-                     ctx.drawImage(sprite.texture, 
-                        texX, 0, 1, 64, // Source
-                        strip, (HEIGHT - spriteH)/2, 1, spriteH // Dest
-                     );
-                 }
-             }
-        }
-    }
-
-    function death() {
-        isDead = true;
-        document.getElementById('jumpscare').style.display = 'flex';
-        document.getElementById('jumpscare').style.opacity = '1';
-        document.getElementById('status').innerText = "TAP TO RESTART";
-    }
-
-    function resetGame() {
-        isDead = false;
-        player.x = 96;
-        player.y = 96;
-        monster.x = 10 * BLOCK_SIZE;
-        monster.y = 10 * BLOCK_SIZE;
-        document.getElementById('jumpscare').style.display = 'none';
-        document.getElementById('status').innerText = "";
-    }
-
+    // --- RENDER LOOP ---
     function loop() {
-        update();
-        draw();
+        if(gameState === 'PLAY') {
+            update();
+            render();
+        } else if (gameState === 'DEAD') {
+            renderDeath();
+        }
         requestAnimationFrame(loop);
     }
 
-    loop();
+    function update() {
+        frame++;
+        
+        // Move
+        if(touchL.active) {
+            // Normalize stick vector
+            let dist = Math.sqrt(touchL.dx*touchL.dx + touchL.dy*touchL.dy);
+            let speed = Math.min(dist, STICK_MAX) / STICK_MAX; // 0 to 1
+            let angle = Math.atan2(touchL.dy, touchL.dx);
+            
+            // Move relative to player direction
+            // Joy Up (negative Y) should mean move Forward
+            // We map Joystick angle to Player Direction
+            // forward vector = player.dir
+            
+            let moveSpeed = 4.0 * speed;
+            // The joystick angle is absolute on screen. We need to convert "Up" on screen to "Forward" in world
+            let moveDir = player.dir + angle + (Math.PI/2); 
 
+            let nx = player.x + Math.cos(moveDir) * moveSpeed;
+            let ny = player.y + Math.sin(moveDir) * moveSpeed;
+
+            if(map[Math.floor(ny/BLOCK)*MAP_DIM + Math.floor(nx/BLOCK)] === 0) {
+                player.x = nx; player.y = ny;
+            }
+        }
+
+        // Look
+        if(touchR.active) {
+            let turn = (touchR.dx / STICK_MAX) * 0.08;
+            player.dir += turn;
+        }
+
+        // MONSTER AI
+        let dx = player.x - enemy.x;
+        let dy = player.y - enemy.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+
+        // Speed increases as he gets closer (The Boiled One Effect)
+        let enemySpeed = dist > 300 ? 1.5 : 2.5; 
+        
+        enemy.x += (dx/dist) * enemySpeed;
+        enemy.y += (dy/dist) * enemySpeed;
+
+        // Glitch effect logic
+        if(dist < 200 && Math.random() > 0.9) {
+            canvas.style.transform = `translate(${Math.random()*10-5}px, ${Math.random()*10-5}px)`;
+            canvas.style.filter = "invert(1)";
+        } else {
+            canvas.style.transform = "none";
+            canvas.style.filter = "contrast(1.2) brightness(0.8) sepia(0.2)";
+        }
+
+        if(dist < 30) {
+            gameState = 'DEAD';
+            Audio.playScream();
+            document.getElementById('death-screen').style.display = 'flex';
+        }
+    }
+
+    function render() {
+        // Floor/Ceiling
+        ctx.fillStyle = '#050505';
+        ctx.fillRect(0, 0, W, H);
+        
+        // Raycasting
+        for(let x=0; x<W; x++) {
+            let rayAngle = (player.dir - FOV/2) + (x/W)*FOV;
+            let dist = 0;
+            let hit = false;
+            
+            let cos = Math.cos(rayAngle);
+            let sin = Math.sin(rayAngle);
+            
+            // DDA-ish loop
+            let testX = player.x; 
+            let testY = player.y;
+            
+            let i=0;
+            while(!hit && i<40) { // View distance
+                dist += BLOCK/2; // Rough step
+                testX = player.x + cos*dist;
+                testY = player.y + sin*dist;
+                
+                let mx = Math.floor(testX/BLOCK);
+                let my = Math.floor(testY/BLOCK);
+                
+                if(mx<0 || mx>=MAP_DIM || my<0 || my>=MAP_DIM || map[my*MAP_DIM+mx]===1) {
+                    hit = true;
+                    // Refine distance binary search style for smoother walls? 
+                    // Nah, keep it raw for retro feel
+                }
+                i++;
+            }
+            
+            // Fisheye fix
+            let pDist = dist * Math.cos(rayAngle - player.dir);
+            ZBUFFER[x] = pDist;
+            
+            let wallH = (BLOCK * H) / pDist;
+            
+            // Wall Color (Distance Shading)
+            let shade = Math.max(0, 255 - pDist*0.3);
+            if(hit) {
+                // Red tinted walls
+                ctx.fillStyle = `rgb(${shade}, ${shade*0.1}, ${shade*0.1})`; 
+                ctx.fillRect(x, (H-wallH)/2, 1, wallH);
+            }
+        }
+
+        // Draw Enemy (Billboard)
+        let ex = enemy.x - player.x;
+        let ey = enemy.y - player.y;
+        let eDist = Math.sqrt(ex*ex + ey*ey);
+        
+        let spriteDir = Math.atan2(ey, ex) - player.dir;
+        while(spriteDir < -Math.PI) spriteDir += Math.PI*2;
+        while(spriteDir > Math.PI) spriteDir -= Math.PI*2;
+        
+        if(Math.abs(spriteDir) < FOV) {
+            let screenX = (0.5 * (spriteDir/(FOV/2)) + 0.5) * W;
+            let spriteH = (BLOCK * H) / eDist;
+            let spriteW = spriteH;
+            
+            let startX = Math.floor(screenX - spriteW/2);
+            let endX = Math.floor(screenX + spriteW/2);
+            
+            for(let sx=startX; sx<endX; sx++) {
+                if(sx >= 0 && sx < W && eDist < ZBUFFER[sx]) {
+                   let texX = Math.floor((sx - startX) / spriteW * spriteSize);
+                   ctx.drawImage(monsterCanvas, texX, 0, 1, spriteSize, sx, (H-spriteH)/2, 1, spriteH);
+                }
+            }
+        }
+        
+        // Draw Joystick HUD
+        drawJoy(touchL, 40, H-40);
+        drawJoy(touchR, W-40, H-40);
+    }
+
+    function drawJoy(touch, baseX, baseY) {
+        if(!touch.active) return;
+        // Map screen coords to low-res canvas coords
+        let sX = (touch.x / window.innerWidth) * W;
+        let sY = (touch.y / window.innerHeight) * H;
+        
+        ctx.strokeStyle = 'rgba(255,0,0,0.5)';
+        ctx.beginPath(); ctx.arc(sX, sY, 15, 0, Math.PI*2); ctx.stroke();
+        
+        ctx.fillStyle = 'rgba(255,0,0,0.8)';
+        ctx.beginPath(); ctx.arc(sX + (touch.dx/STICK_MAX)*10, sY + (touch.dy/STICK_MAX)*10, 5, 0, Math.PI*2); ctx.fill();
+    }
+
+    function renderDeath() {
+        // Chaos Effect
+        ctx.fillStyle = `rgb(${Math.random()*255}, 0, 0)`;
+        ctx.fillRect(0, 0, W, H);
+        
+        // Giant Face
+        let shakeX = (Math.random() - 0.5) * 50;
+        let shakeY = (Math.random() - 0.5) * 50;
+        ctx.drawImage(monsterCanvas, 0 + shakeX, 0 + shakeY, W, H);
+        
+        // Static
+        for(let i=0; i<1000; i++) {
+            ctx.fillStyle = Math.random()>0.5 ? '#fff' : '#000';
+            ctx.fillRect(Math.random()*W, Math.random()*H, 2, 2);
+        }
+    }
+
+    loop();
 </script>
 </body>
 </html>
