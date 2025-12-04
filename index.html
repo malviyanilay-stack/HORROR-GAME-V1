@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>THE BASEMENT - Mobile Horror</title>
+<style>
+    body {
+        margin: 0;
+        background-color: #000;
+        overflow: hidden;
+        touch-action: none; /* Prevents scrolling on iPad */
+        font-family: 'Courier New', Courier, monospace;
+        user-select: none;
+        -webkit-user-select: none;
+    }
+    #gameCanvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        image-rendering: pixelated;
+    }
+    #ui-layer {
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
+        pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+    }
+    .hud-text {
+        color: red;
+        font-size: 24px;
+        font-weight: bold;
+        text-shadow: 0 0 10px #ff0000;
+        text-align: center;
+    }
+    #controls-hint {
+        position: absolute;
+        bottom: 20px;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 14px;
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        padding: 0 40px;
+        box-sizing: border-box;
+    }
+    /* Simple vignette to make it darker */
+    .vignette {
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: radial-gradient(circle, transparent 40%, black 95%);
+        pointer-events: none;
+    }
+    /* Blood overlay on death */
+    #jumpscare {
+        display: none;
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: red;
+        opacity: 0;
+        transition: opacity 0.1s;
+        z-index: 10;
+        align-items: center;
+        justify-content: center;
+    }
+    #jumpscare h1 {
+        font-size: 50px;
+        color: black;
+    }
+</style>
+</head>
+<body>
+
+    <div id="jumpscare"><h1>FOUND YOU</h1></div>
+    <canvas id="gameCanvas"></canvas>
+    <div class="vignette"></div>
+    
+    <div id="ui-layer">
+        <div id="status" class="hud-text"></div>
+    </div>
+
+    <div id="controls-hint">
+        <span>MOVE (Slide)</span>
+        <span>LOOK (Slide)</span>
+    </div>
+
+<script>
+    // --- SETUP ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false }); // Optimize
+    
+    // Internal Resolution (Lower = retro look + faster on iPad)
+    const WIDTH = 160; 
+    const HEIGHT = 120;
+    
+    canvas.width = WIDTH;
+    canvas.height = HEIGHT;
+
+    // --- GAME CONSTANTS ---
+    const BLOCK_SIZE = 64;
+    const FOV = Math.PI / 3;
+    const MAP_SIZE = 16;
+    const SPEED = 3.0;
+    const TURN_SPEED = 0.06;
+
+    // --- GAME STATE ---
+    let player = { x: 96, y: 96, dir: 0 };
+    let inputs = { forward: 0, turn: 0 }; // -1 to 1 range
+    let zBuffer = new Array(WIDTH).fill(0); // For depth sorting sprites
+    let isDead = false;
+    let frameCount = 0;
+
+    // Map: 1=Wall, 0=Empty
+    const map = [
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+        1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
+        1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
+        1,0,0,1,1,0,1,0,0,1,0,0,0,0,0,1,
+        1,0,0,1,0,0,0,0,0,1,0,0,0,0,0,1,
+        1,0,0,1,0,0,0,0,0,1,1,1,1,0,0,1,
+        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+        1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,1,
+        1,0,1,1,0,0,0,1,1,1,0,0,1,0,0,1,
+        1,0,0,0,0,0,0,1,0,1,0,0,1,0,0,1,
+        1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,
+        1,0,1,0,0,0,0,1,0,1,0,0,0,0,0,1,
+        1,0,1,0,0,0,0,1,1,1,0,0,0,0,0,1,
+        1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,
+        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    ];
+
+    // The Monster Entity
+    let monster = {
+        x: 10 * BLOCK_SIZE,
+        y: 10 * BLOCK_SIZE,
+        texture: null
+    };
+
+    // --- PROCEDURAL GRAPHICS ---
+    // Generate a creepy face texture in code
+    function createMonsterTexture() {
+        const mCanvas = document.createElement('canvas');
+        mCanvas.width = 64;
+        mCanvas.height = 64;
+        const mCtx = mCanvas.getContext('2d');
+
+        // Body (Shadow)
+        mCtx.fillStyle = '#000';
+        mCtx.fillRect(10, 10, 44, 54);
+        
+        // Eyes (Glowing Red)
+        mCtx.fillStyle = '#f00';
+        mCtx.beginPath();
+        mCtx.arc(22, 25, 4, 0, Math.PI*2);
+        mCtx.arc(42, 25, 4, 0, Math.PI*2);
+        mCtx.fill();
+
+        // Mouth (Scream)
+        mCtx.beginPath();
+        mCtx.ellipse(32, 45, 6, 12, 0, 0, Math.PI*2);
+        mCtx.fill();
+        
+        return mCanvas;
+    }
+    monster.texture = createMonsterTexture();
+
+    // --- TOUCH INPUT SYSTEM ---
+    // We split screen in half: Left = Move, Right = Turn
+    let touchStartY = 0;
+    let touchStartX = 0;
+
+    window.addEventListener('touchstart', (e) => {
+        for(let i=0; i<e.touches.length; i++) {
+            let t = e.touches[i];
+            if(isDead) {
+                resetGame();
+                return;
+            }
+            if (t.clientX < window.innerWidth / 2) {
+                touchStartY = t.clientY;
+            } else {
+                touchStartX = t.clientX;
+            }
+        }
+    }, {passive: false});
+
+    window.addEventListener('touchmove', (e) => {
+        e.preventDefault(); // Stop scrolling
+        inputs.forward = 0;
+        inputs.turn = 0;
+
+        for(let i=0; i<e.touches.length; i++) {
+            let t = e.touches[i];
+            
+            // Left Side: Move
+            if (t.clientX < window.innerWidth / 2) {
+                let deltaY = touchStartY - t.clientY;
+                // Clamp speed
+                if (deltaY > 20) inputs.forward = 1;
+                if (deltaY < -20) inputs.forward = -1;
+            } 
+            // Right Side: Turn
+            else {
+                let deltaX = t.clientX - touchStartX;
+                if (deltaX > 20) inputs.turn = 1;
+                if (deltaX < -20) inputs.turn = -1;
+            }
+        }
+    }, {passive: false});
+
+    window.addEventListener('touchend', (e) => {
+        // Simple reset inputs if no fingers
+        if (e.touches.length === 0) {
+            inputs.forward = 0;
+            inputs.turn = 0;
+        }
+    });
+
+    // --- GAME LOOP ---
+    function update() {
+        if (isDead) return;
+
+        // Player Movement
+        if (inputs.turn !== 0) player.dir += inputs.turn * TURN_SPEED;
+        
+        if (inputs.forward !== 0) {
+            let step = inputs.forward * SPEED;
+            let newX = player.x + Math.cos(player.dir) * step;
+            let newY = player.y + Math.sin(player.dir) * step;
+
+            // Collision
+            if (map[Math.floor(newY/BLOCK_SIZE) * MAP_SIZE + Math.floor(newX/BLOCK_SIZE)] === 0) {
+                player.x = newX;
+                player.y = newY;
+            }
+        }
+
+        // MONSTER AI (Simple Chase)
+        // Move monster towards player slowly
+        let dx = player.x - monster.x;
+        let dy = player.y - monster.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+
+        if (dist > 20) {
+            monster.x += (dx / dist) * 1.5; // Speed 1.5
+            monster.y += (dy / dist) * 1.5;
+        }
+
+        // Kill check
+        if (dist < 30) {
+            death();
+        }
+
+        // Glitch effect logic
+        frameCount++;
+    }
+
+    function draw() {
+        // Clear screen (Ceiling/Floor)
+        ctx.fillStyle = '#111'; // Ceiling
+        ctx.fillRect(0, 0, WIDTH, HEIGHT / 2);
+        ctx.fillStyle = '#222'; // Floor
+        ctx.fillRect(0, HEIGHT / 2, WIDTH, HEIGHT / 2);
+
+        // 1. RAYCAST WALLS
+        for (let x = 0; x < WIDTH; x++) {
+            let rayAngle = (player.dir - FOV / 2.0) + (x / WIDTH) * FOV;
+            let dist = 0;
+            let hit = false;
+            
+            let eyeX = Math.cos(rayAngle);
+            let eyeY = Math.sin(rayAngle);
+
+            let testX = player.x;
+            let testY = player.y;
+
+            // Simple Raymarch
+            while (!hit && dist < 500) {
+                dist += 2; // Step size
+                testX = player.x + eyeX * dist;
+                testY = player.y + eyeY * dist;
+
+                let mx = Math.floor(testX / BLOCK_SIZE);
+                let my = Math.floor(testY / BLOCK_SIZE);
+
+                if (mx < 0 || mx >= MAP_SIZE || my < 0 || my >= MAP_SIZE || map[my*MAP_SIZE + mx] === 1) {
+                    hit = true;
+                }
+            }
+            
+            // Fix fisheye
+            let pDist = dist * Math.cos(rayAngle - player.dir);
+            zBuffer[x] = pDist; // Save for sprite sorting
+
+            // Wall Height
+            let wallH = (BLOCK_SIZE * HEIGHT) / pDist;
+            
+            // Draw Wall Strip
+            // Color based on distance (Lighting)
+            let brightness = Math.max(0, 200 - pDist * 0.8);
+            ctx.fillStyle = `rgb(${brightness}, ${brightness * 0.5}, ${brightness * 0.5})`; // Reddish walls
+            ctx.fillRect(x, (HEIGHT - wallH) / 2, 1, wallH);
+        }
+
+        // 2. DRAW MONSTER (Sprite Casting)
+        drawSprite(monster);
+    }
+
+    function drawSprite(sprite) {
+        // Relative position
+        let dx = sprite.x - player.x;
+        let dy = sprite.y - player.y;
+
+        // Transform sprite with the inverse camera matrix
+        // [ planeX   dirX ] -1                                       [ dirY      -dirX ]
+        // [               ]       =  1/(planeX*dirY-dirX*planeY) * [                 ]
+        // [ planeY   dirY ]                                          [ -planeY  planeX ]
+
+        // Simplified 2D rotation
+        let spriteDist = Math.sqrt(dx*dx + dy*dy);
+        
+        // Calculate angle between player and sprite
+        let spriteAngle = Math.atan2(dy, dx) - player.dir;
+        
+        // Wrap angle to -PI to PI
+        while (spriteAngle < -Math.PI) spriteAngle += 2 * Math.PI;
+        while (spriteAngle > Math.PI) spriteAngle -= 2 * Math.PI;
+
+        // Check if visible (in front of player)
+        if (Math.abs(spriteAngle) < FOV / 1.5) {
+             let screenX = (0.5 * (spriteAngle / (FOV / 2)) + 0.5) * WIDTH;
+             let spriteH = (BLOCK_SIZE * HEIGHT) / spriteDist;
+             let spriteW = spriteH; // Square sprite
+
+             // Draw sprite scanlines
+             let startX = Math.floor(screenX - spriteW / 2);
+             let endX = Math.floor(screenX + spriteW / 2);
+
+             for (let strip = startX; strip < endX; strip++) {
+                 // Check if strip is on screen AND closer than wall
+                 if (strip >= 0 && strip < WIDTH && spriteDist < zBuffer[strip]) {
+                     // Calculate texture coordinate
+                     let texX = Math.floor( (strip - startX) / spriteW * 64 );
+                     
+                     // Draw strip of sprite
+                     ctx.drawImage(sprite.texture, 
+                        texX, 0, 1, 64, // Source
+                        strip, (HEIGHT - spriteH)/2, 1, spriteH // Dest
+                     );
+                 }
+             }
+        }
+    }
+
+    function death() {
+        isDead = true;
+        document.getElementById('jumpscare').style.display = 'flex';
+        document.getElementById('jumpscare').style.opacity = '1';
+        document.getElementById('status').innerText = "TAP TO RESTART";
+    }
+
+    function resetGame() {
+        isDead = false;
+        player.x = 96;
+        player.y = 96;
+        monster.x = 10 * BLOCK_SIZE;
+        monster.y = 10 * BLOCK_SIZE;
+        document.getElementById('jumpscare').style.display = 'none';
+        document.getElementById('status').innerText = "";
+    }
+
+    function loop() {
+        update();
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>
